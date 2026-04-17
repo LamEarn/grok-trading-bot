@@ -1,119 +1,92 @@
-# =====================================================
-# SMART TRADING AI BOT - SINGLE FILE
-# Telegram + Binance Futures + 24/7 on Railway
-# =====================================================
-
 import os
 import time
 import logging
 import ccxt
 import requests
+import schedule
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ===================== CONFIG =====================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
-# === Your Credentials ===
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8484289790:AAGKFL0MmP9iafuM50okuJAeRIDRTAQIPnE')
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-SYMBOL = os.getenv('SYMBOL', 'BTC/USDT:USDT')
-LEVERAGE = int(os.getenv('LEVERAGE', '10'))
-TESTNET = os.getenv('TESTNET', 'true').lower() == 'true'
+TELEGRAM_TOKEN = "8484289790:AAGKFL0MmP9iafuM50okuJAeRIDRTAQIPnE"
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ===================== TELEGRAM HELPER =====================
-def send_telegram(message: str):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+SYMBOL = "BTC/USDT:USDT"
+LEVERAGE = 10
+
+# ===================== TELEGRAM =====================
+def send_msg(text):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"})
     except:
         pass
 
-# ===================== MAIN BOT =====================
-class SmartTradingBot:
-    def __init__(self):
-        self.exchange = ccxt.binance({
-            'apiKey': os.getenv('BINANCE_API_KEY'),
-            'secret': os.getenv('BINANCE_API_SECRET'),
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'},
-        })
+# ===================== BINANCE =====================
+exchange = ccxt.binance({
+    'apiKey': os.getenv('BINANCE_API_KEY'),
+    'secret': os.getenv('BINANCE_API_SECRET'),
+    'options': {'defaultType': 'future'},
+    'enableRateLimit': True,
+})
 
-        if TESTNET:
-            self.exchange.set_sandbox_mode(True)
-            logger.info("🔧 TESTNET MODE ACTIVATED - Safe Mode")
-            send_telegram("🚀 <b>Smart Trading AI Bot Started</b>\nMode: <b>TESTNET</b> ✅")
+# Set to REAL trading (remove testnet)
+# exchange.set_sandbox_mode(False)   # Real money mode
 
-        self.symbol = SYMBOL
-        self.leverage = LEVERAGE
+exchange.set_leverage(LEVERAGE, SYMBOL)
 
-    def run(self):
-        logger.info(f"🤖 Bot Running on {self.symbol} @ {self.leverage}x")
-        send_telegram(
-            f"✅ <b>Bot is Live!</b>\n"
-            f"Symbol: <b>{self.symbol}</b>\n"
-            f"Leverage: <b>{self.leverage}x</b>\n"
-            f"Mode: {'TESTNET 🛡️' if TESTNET else 'LIVE ⚠️'}"
-        )
-
-        self.exchange.set_leverage(self.leverage, self.symbol)
-
-        while True:
-            try:
-                ticker = self.exchange.fetch_ticker(self.symbol)
-                price = float(ticker['last'])
-                change = float(ticker.get('percentage', 0))
-
-                # === Trading Logic ===
-                if price % 100 < 33:
-                    signal = "🟢 STRONG BUY"
-                    send_telegram(
-                        f"{signal}\n"
-                        f"💰 Price: <b>${price:,.2f}</b>\n"
-                        f"24h: {change:+.2f}%\n"
-                        f"Symbol: {self.symbol}"
-                    )
-                elif price % 100 > 67:
-                    signal = "🔴 STRONG SELL"
-                    send_telegram(
-                        f"{signal}\n"
-                        f"💰 Price: <b>${price:,.2f}</b>\n"
-                        f"24h: {change:+.2f}%\n"
-                        f"Symbol: {self.symbol}"
-                    )
-                else:
-                    signal = "🟡 HOLD"
-
-                logger.info(f"Price: ${price:,.2f} | {signal}")
-                time.sleep(60)   # Check every 60 seconds
-
-            except Exception as e:
-                error = f"⚠️ Error: {str(e)[:150]}"
-                logger.error(error)
-                send_telegram(error)
-                time.sleep(10)
-
-
-# ===================== START BOT =====================
-if __name__ == "__main__":
+# ===================== SCHEDULER =====================
+def place_order(side, amount):
     try:
-        bot = SmartTradingBot()
-        bot.run()
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-        send_telegram("🛑 Bot stopped manually")
+        order = exchange.create_market_order(SYMBOL, side, amount)
+        send_msg(f"✅ {side.upper()} ORDER EXECUTED\nSymbol: {SYMBOL}\nAmount: {amount}\nTime: {datetime.now()}")
+        logger.info(f"Order executed: {side} {amount}")
     except Exception as e:
-        logger.critical(f"Fatal Error: {e}")
-        send_telegram(f"❌ Bot Crashed: {str(e)[:200]}")
+        send_msg(f"❌ Order Failed: {str(e)}")
+
+# ===================== COMMANDS =====================
+def handle_command(command):
+    try:
+        parts = command.split()
+        cmd = parts[0].lower()
+
+        if cmd == "/buy":
+            amount = float(parts[1]) if len(parts) > 1 else 0.001
+            schedule.every().day.at("10:00").do(place_order, "buy", amount)   # Example time
+            send_msg(f"🟢 BUY scheduled for 10:00 daily\nAmount: {amount} BTC")
+
+        elif cmd == "/sell":
+            amount = float(parts[1]) if len(parts) > 1 else 0.001
+            schedule.every().day.at("22:00").do(place_order, "sell", amount)
+            send_msg(f"🔴 SELL scheduled for 22:00 daily\nAmount: {amount} BTC")
+
+        elif cmd == "/nowbuy":
+            amount = float(parts[1]) if len(parts) > 1 else 0.001
+            place_order("buy", amount)
+
+        elif cmd == "/nowsell":
+            amount = float(parts[1]) if len(parts) > 1 else 0.001
+            place_order("sell", amount)
+
+        elif cmd == "/status":
+            send_msg("✅ Bot is running\nUse /buy <amount> or /nowbuy <amount>")
+
+    except:
+        send_msg("Usage:\n/buy 0.001\n/sell 0.001\n/nowbuy 0.001\n/status")
+
+# ===================== MAIN =====================
+send_msg("🚀 <b>Simple Scheduling Trading Bot Started</b>\nReal Mode - Be Careful!")
+
+while True:
+    try:
+        # You can add polling logic later, but for now we run scheduled tasks
+        schedule.run_pending()
+        time.sleep(10)
+    except Exception as e:
+        logger.error(e)
+        time.sleep(30)
